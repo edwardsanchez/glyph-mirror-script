@@ -21,6 +21,14 @@ if script_dir not in sys.path:
 from mirror_geometry import Point, mirror_horizontal, mirror_vertical, MirrorError
 
 
+def log(message):
+    """Log helper to Macro Panel."""
+    try:
+        print("[Mirror] %s" % message)
+    except Exception:
+        pass
+
+
 class MirrorSelectionUI(object):
     def __init__(self):
         self.font = Glyphs.font
@@ -93,6 +101,8 @@ class MirrorSelectionUI(object):
         layer = self.layer
         paths = layer.paths
         selNodes = self.selectedNodes()
+        log("Vertical mirror: %s source, %d selected nodes" % (sourceSide, len(selNodes)))
+        log("Horizontal mirror: %s source, %d selected nodes" % (sourceSide, len(selNodes)))
         
         if not selNodes:
             Message(
@@ -106,6 +116,7 @@ class MirrorSelectionUI(object):
             axisX = max(n.position.x for n in selNodes)  # right edge of selected half
         else:
             axisX = min(n.position.x for n in selNodes)  # left edge of selected half
+        log("Initial axisX: %.3f" % axisX)
         
         center_band = 5.0
         eps = 0.01
@@ -141,6 +152,7 @@ class MirrorSelectionUI(object):
                         node.position.x = avg_x
             
             axisX = avg_x
+            log("Axis snapped to %.3f" % axisX)
         
         # Validate seam alignment using geometry module
         try:
@@ -164,6 +176,7 @@ class MirrorSelectionUI(object):
             
             aligned_x = validate_seam_alignment(seam_points, check_x=True, eps=eps)
             axisX = aligned_x
+            log("Aligned axisX: %.3f" % axisX)
             
         except MirrorError as e:
             Message(
@@ -179,6 +192,7 @@ class MirrorSelectionUI(object):
         # Record which paths had selections before we start deleting nodes.
         # (Deleting nodes can clear the selection internally in Glyphs.)
         paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
+        log("Paths with selection (before deletion): %d" % len(paths_with_selection))
         if not paths_with_selection:
             Message(
                 "No nodes selected",
@@ -187,6 +201,7 @@ class MirrorSelectionUI(object):
             return
 
         # Remove unselected nodes on the opposite side
+        deleted_counts = 0
         for path in paths:
             if not any(n.selected for n in path.nodes):
                 continue
@@ -205,6 +220,8 @@ class MirrorSelectionUI(object):
             
             for i in reversed(to_delete):
                 del path.nodes[i]
+            deleted_counts += len(to_delete)
+        log("Deleted %d nodes on opposite side" % deleted_counts)
         
         # Duplicate and mirror selected paths
         paths_to_mirror = paths_with_selection
@@ -218,9 +235,11 @@ class MirrorSelectionUI(object):
                 if n is not None:
                     n.selected = False
             new_paths.append(new_path)
+        log("Created %d mirrored paths" % len(new_paths))
         
         for p in new_paths:
             layer.paths.append(p)
+        log("Layer now has %d paths" % len(layer.paths))
         
         layer.removeOverlap()
         layer.correctPathDirection()
@@ -247,6 +266,7 @@ class MirrorSelectionUI(object):
             axisY = min(n.position.y for n in selNodes)  # bottom edge of top half
         else:
             axisY = max(n.position.y for n in selNodes)  # top edge of bottom half
+        log("Initial axisY: %.3f" % axisY)
         
         center_band = 5.0
         eps = 0.01
@@ -279,6 +299,7 @@ class MirrorSelectionUI(object):
                         node.position.y = avg_y
             
             axisY = avg_y
+            log("Axis snapped to %.3f" % axisY)
         
         # Validate seam alignment
         try:
@@ -300,6 +321,7 @@ class MirrorSelectionUI(object):
             
             aligned_y = validate_seam_alignment(seam_points, check_x=False, eps=eps)
             axisY = aligned_y
+            log("Aligned axisY: %.3f" % axisY)
             
         except MirrorError as e:
             Message(
@@ -314,6 +336,7 @@ class MirrorSelectionUI(object):
         
         # Record paths that had selected nodes before deletion.
         paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
+        log("Paths with selection (before deletion): %d" % len(paths_with_selection))
         if not paths_with_selection:
             Message(
                 "No nodes selected",
@@ -322,6 +345,7 @@ class MirrorSelectionUI(object):
             return
 
         # Remove unselected nodes on opposite side
+        deleted_counts = 0
         for path in paths:
             if not any(n.selected for n in path.nodes):
                 continue
@@ -340,6 +364,8 @@ class MirrorSelectionUI(object):
             
             for i in reversed(to_delete):
                 del path.nodes[i]
+            deleted_counts += len(to_delete)
+        log("Deleted %d nodes on opposite side" % deleted_counts)
         
         # Duplicate and mirror selected paths
         paths_to_mirror = paths_with_selection
@@ -353,9 +379,11 @@ class MirrorSelectionUI(object):
                 if n is not None:
                     n.selected = False
             new_paths.append(new_path)
+        log("Created %d mirrored paths" % len(new_paths))
         
         for p in new_paths:
             layer.paths.append(p)
+        log("Layer now has %d paths" % len(layer.paths))
         
         layer.removeOverlap()
         layer.correctPathDirection()
