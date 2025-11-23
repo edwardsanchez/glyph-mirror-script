@@ -7,7 +7,7 @@ Simple workflow: select one half of a contour, mirror it to replace the other ha
 
 from __future__ import division, print_function, unicode_literals
 import objc
-from GlyphsApp import Glyphs, Message, GSOFFCURVE
+from GlyphsApp import Glyphs, Message, GSOFFCURVE, GSLayer
 from vanilla import Window, RadioGroup, Button, CheckBox
 
 
@@ -98,7 +98,8 @@ class MirrorSelectionUI(object):
     
     def mirrorPath(self, path, axis, sourceSide, autoSnap):
         """Mirror a single path by replacing the opposite side with the selected side."""
-        
+        layer = self.layer
+
         # Collect selected nodes in this path
         selected_nodes = [n for n in path.nodes if n is not None and n.selected]
         
@@ -161,9 +162,20 @@ class MirrorSelectionUI(object):
                 seam_coord = avg
                 print("[Mirror] Snapped %d seam nodes to %.1f" % (len(seam_nodes), avg))
         
-        # Delete nodes on the opposite side (unselected nodes beyond the seam)
+        # Work on a copy of the path so we can replace the original cleanly
+        try:
+            pathIndex = list(layer.paths).index(path)
+        except ValueError:
+            # Path not found in layer; nothing to do
+            print("[Mirror] Warning: path not found in layer")
+            return
+
+        working_path = path.copy()
+
+        # Delete nodes on the opposite side (unselected nodes beyond the seam),
+        # but only within this working copy.
         to_delete = []
-        for i, node in enumerate(path.nodes):
+        for i, node in enumerate(working_path.nodes):
             if node is None or node.selected:
                 continue
             
@@ -183,25 +195,39 @@ class MirrorSelectionUI(object):
         
         # Delete in reverse order to maintain indices
         for i in reversed(to_delete):
-            del path.nodes[i]
-        
+            del working_path.nodes[i]
+
         print("[Mirror] Deleted %d nodes on opposite side" % len(to_delete))
         
-        # Now mirror the selected side
-        # Create a copy of the path
-        mirrored_path = path.copy()
+        # Now mirror the remaining (source) side
+        source_half = working_path
+        mirrored_half = source_half.copy()
         
         # Apply mirror transform
         if axis == 'vertical':
             # Mirror horizontally: x' = -x + 2*seam
-            mirrored_path.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * seam_coord, 0.0))
+            mirrored_half.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * seam_coord, 0.0))
         else:
             # Mirror vertically: y' = -y + 2*seam
-            mirrored_path.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * seam_coord))
-        
-        # Add mirrored path to layer
-        self.layer.paths.append(mirrored_path)
-        print("[Mirror] Added mirrored path")
+            mirrored_half.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * seam_coord))
+
+        # Build a temporary layer containing just the two halves and remove overlap there
+        tmp_layer = GSLayer()
+        tmp_layer.width = layer.width
+        tmp_layer.paths.append(source_half)
+        tmp_layer.paths.append(mirrored_half)
+        tmp_layer.removeOverlap()
+
+        # Replace the original path with the unified result from tmp_layer
+        new_paths = [p.copy() for p in tmp_layer.paths]
+
+        # Remove original path
+        del layer.paths[pathIndex]
+        # Insert new paths at the same index (preserve order)
+        for new_path in reversed(new_paths):
+            layer.paths.insert(pathIndex, new_path)
+
+        print("[Mirror] Replaced path with %d unified path(s)" % len(new_paths))
 
 
 def main():
