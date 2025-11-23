@@ -135,6 +135,14 @@ class MirrorSelectionUI(object):
                 )
                 return False
 
+            if self._countSeamNodes(path, axis, seam) < 2:
+                self.log("Path #%d: missing seam nodes near %.3f" % (path_index, seam))
+                Message(
+                    "Missing seam points",
+                    "Select the seam nodes for each contour you want to mirror and try again.",
+                )
+                return False
+
             self.log(
                 "Path #%d: selected=%d seam=%.3f"
                 % (path_index, len(selected_nodes), seam)
@@ -223,7 +231,7 @@ class MirrorSelectionUI(object):
             self.log("Path #%d: trim produced empty path" % path_index)
             return False
 
-        unified_nodes = self._buildUnifiedNodes(path_index, source_half, axis, seam)
+        unified_nodes = self._buildUnifiedNodes(path_index, source_half, axis, seam, source_side)
         if not unified_nodes:
             self.log("Path #%d: failed to build unified nodes" % path_index)
             return False
@@ -260,6 +268,13 @@ class MirrorSelectionUI(object):
 
         return working_path
 
+    def _countSeamNodes(self, path, axis, seam):
+        count = 0
+        for node in path.nodes:
+            if self._isSeamOncurve(node, axis, seam):
+                count += 1
+        return count
+
     def _isOppositeCoord(self, coord, axis, source_side, seam):
         if abs(coord - seam) <= SIDE_EPSILON:
             return False
@@ -273,13 +288,28 @@ class MirrorSelectionUI(object):
             return coord < seam - SIDE_EPSILON
         return coord > seam + SIDE_EPSILON
 
-    def _buildUnifiedNodes(self, path_index, source_half, axis, seam):
+    def _buildUnifiedNodes(self, path_index, source_half, axis, seam, source_side):
         mirrored_half = source_half.copy()
         mirrored_half.applyTransform(self._mirrorTransform(axis, seam))
         self.log("Path #%d: mirrored %d nodes" % (path_index, len(mirrored_half.nodes)))
 
-        left_segment = self._extractSegment(path_index, source_half, axis, seam, label="left")
-        right_segment = self._extractSegment(path_index, mirrored_half, axis, seam, label="right")
+        left_segment = self._extractSegment(
+            path_index,
+            source_half,
+            axis,
+            seam,
+            expected_side=source_side,
+            label="source",
+        )
+        mirror_side = self._oppositeSide(axis, source_side)
+        right_segment = self._extractSegment(
+            path_index,
+            mirrored_half,
+            axis,
+            seam,
+            expected_side=mirror_side,
+            label="mirror",
+        )
 
         if not left_segment or not right_segment:
             self.log("Path #%d: missing seam segments (left=%s right=%s)" % (path_index, bool(left_segment), bool(right_segment)))
@@ -296,7 +326,7 @@ class MirrorSelectionUI(object):
             combined.pop()
         return combined
 
-    def _extractSegment(self, path_index, path, axis, seam, label):
+    def _extractSegment(self, path_index, path, axis, seam, expected_side, label):
         nodes = list(path.nodes)
         count = len(nodes)
         if count == 0:
@@ -310,27 +340,55 @@ class MirrorSelectionUI(object):
             self.log("Path #%d: %s segment missing seam nodes (found %d)" % (path_index, label, len(seam_indices)))
             return None
 
-        start_index = seam_indices[0]
-        segment = []
-        seam_hits = 0
-        steps = 0
-        idx = start_index
-        while steps <= count:
-            node_copy = nodes[idx].copy()
-            segment.append(node_copy)
-            if self._isSeamOncurve(node_copy, axis, seam):
-                seam_hits += 1
-                if seam_hits == 2:
-                    break
-            idx = (idx + 1) % count
-            steps += 1
+        candidates = []
+        for start_index in seam_indices:
+            segment = []
+            seam_hits = 0
+            steps = 0
+            idx = start_index
+            while steps <= count:
+                node_copy = nodes[idx].copy()
+                segment.append(node_copy)
+                if self._isSeamOncurve(node_copy, axis, seam):
+                    seam_hits += 1
+                    if seam_hits == 2 and steps > 0:
+                        break
+                idx = (idx + 1) % count
+                steps += 1
+            if seam_hits < 2:
+                continue
 
-        if seam_hits < 2:
-            self.log("Path #%d: %s segment never reached second seam node" % (path_index, label))
+            side_value = self._segmentSideValue(segment, axis, seam)
+            matches = self._sideMatches(side_value, expected_side, axis, seam)
+            candidates.append((segment, side_value, matches))
+
+        if not candidates:
+            self.log("Path #%d: %s segment missing seam pair" % (path_index, label))
             return None
 
-        self.log("Path #%d: %s segment nodes=%d" % (path_index, label, len(segment)))
-        return segment
+        best = None
+        best_len = -1
+        fallback = None
+        fallback_len = -1
+        for segment, side_value, matches in candidates:
+            seg_len = len(segment)
+            if seg_len > fallback_len:
+                fallback = segment
+                fallback_len = seg_len
+            if matches and seg_len > best_len:
+                best = segment
+                best_len = seg_len
+
+        chosen = best if best is not None else fallback
+        if chosen is None:
+            return None
+
+        chosen_matches = self._sideMatches(self._segmentSideValue(chosen, axis, seam), expected_side, axis, seam)
+        self.log(
+            "Path #%d: %s segment nodes=%d (matches=%s)"
+            % (path_index, label, len(chosen), chosen_matches)
+        )
+        return chosen
 
     def _isSeamOncurve(self, node, axis, seam):
         if node.type == GSOFFCURVE:
@@ -346,6 +404,39 @@ class MirrorSelectionUI(object):
                 continue
             cleaned.append(node)
         return cleaned
+
+    def _segmentSideValue(self, segment, axis, seam):
+        coords = []
+        for node in segment:
+            if node.type == GSOFFCURVE:
+                continue
+            coord = self._nodeCoord(node, axis)
+            if abs(coord - seam) <= SIDE_EPSILON:
+                continue
+            coords.append(coord)
+        if not coords:
+            return None
+        return sum(coords) / len(coords)
+
+    def _sideMatches(self, side_value, expected_side, axis, seam):
+        if expected_side is None or side_value is None:
+            return False
+        if axis == "vertical":
+            if expected_side == "left":
+                return side_value < seam - SIDE_EPSILON
+            if expected_side == "right":
+                return side_value > seam + SIDE_EPSILON
+        else:
+            if expected_side == "top":
+                return side_value > seam + SIDE_EPSILON
+            if expected_side == "bottom":
+                return side_value < seam - SIDE_EPSILON
+        return False
+
+    def _oppositeSide(self, axis, side):
+        if axis == "vertical":
+            return "right" if side == "left" else "left"
+        return "bottom" if side == "top" else "top"
 
     def _nodesCoincide(self, a, b, eps=0.01):
         return abs(a.x - b.x) <= eps and abs(a.y - b.y) <= eps
