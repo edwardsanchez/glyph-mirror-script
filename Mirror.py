@@ -1,32 +1,14 @@
 # MenuTitle: Mirror Selection
 # encoding: utf-8
 """
-Mirror selected glyph nodes across a seam axis.
-Supports horizontal (left/right) and vertical (top/bottom) mirroring
-with strict seam validation and optional auto-snapping.
+Mirror selected nodes across a seam axis.
+Simple workflow: select one half of a contour, mirror it to replace the other half.
 """
 
 from __future__ import division, print_function, unicode_literals
 import objc
 from GlyphsApp import Glyphs, Message, GSOFFCURVE
 from vanilla import Window, RadioGroup, Button, CheckBox
-
-# Import the pure Python mirror geometry module
-import sys
-import os
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
-
-from mirror_geometry import Point, mirror_horizontal, mirror_vertical, MirrorError
-
-
-def log(message):
-    """Log helper to Macro Panel."""
-    try:
-        print("[Mirror] %s" % message)
-    except Exception:
-        pass
 
 
 class MirrorSelectionUI(object):
@@ -67,81 +49,6 @@ class MirrorSelectionUI(object):
         
         self.w.open()
     
-    def selectedNodes(self):
-        """Collect all selected nodes from the layer."""
-        return [n for p in self.layer.paths for n in p.nodes if n.selected]
-
-    def _collect_horizontal_seam_nodes(self, selNodes, axisX, center_band):
-        """Ensure seam nodes exist near axisX. Returns (seam_nodes, updated_selection)."""
-        seam_nodes = [
-            n for n in selNodes
-            if n.type != GSOFFCURVE and abs(n.position.x - axisX) <= center_band
-        ]
-        if seam_nodes:
-            return seam_nodes, selNodes
-
-        auto_nodes = []
-        for path in self.layer.paths:
-            for node in path.nodes:
-                if (
-                    node is not None
-                    and node.type != GSOFFCURVE
-                    and abs(node.position.x - axisX) <= center_band
-                ):
-                    node.selected = True
-                    auto_nodes.append(node)
-
-        if auto_nodes:
-            log("Auto-selected %d seam nodes near x=%.3f" % (len(auto_nodes), axisX))
-            new_selection = self.selectedNodes()
-            seam_nodes = [
-                n for n in new_selection
-                if n.type != GSOFFCURVE and abs(n.position.x - axisX) <= center_band
-            ]
-            return seam_nodes, new_selection
-
-        return [], selNodes
-
-    def _deselect_path_nodes(self, path):
-        """Safely deselect nodes in a path (handles None/other objects)."""
-        for node in path.nodes:
-            try:
-                if node is not None and hasattr(node, "selected"):
-                    node.selected = False
-            except AttributeError:
-                continue
-
-    def _collect_vertical_seam_nodes(self, selNodes, axisY, center_band):
-        """Ensure seam nodes exist near axisY. Returns (seam_nodes, updated_selection)."""
-        seam_nodes = [
-            n for n in selNodes
-            if n.type != GSOFFCURVE and abs(n.position.y - axisY) <= center_band
-        ]
-        if seam_nodes:
-            return seam_nodes, selNodes
-
-        auto_nodes = []
-        for path in self.layer.paths:
-            for node in path.nodes:
-                if (
-                    node is not None
-                    and node.type != GSOFFCURVE
-                    and abs(node.position.y - axisY) <= center_band
-                ):
-                    node.selected = True
-                    auto_nodes.append(node)
-
-        if auto_nodes:
-            log("Auto-selected %d seam nodes near y=%.3f" % (len(auto_nodes), axisY))
-            new_selection = self.selectedNodes()
-            seam_nodes = [
-                n for n in new_selection
-                if n.type != GSOFFCURVE and abs(n.position.y - axisY) <= center_band
-            ]
-            return seam_nodes, new_selection
-
-        return [], selNodes
-    
     def runCallback(self, sender):
         """Execute the mirror operation based on UI selection."""
         index = self.w.sideRadio.get()
@@ -151,327 +58,129 @@ class MirrorSelectionUI(object):
         if index in (1, 3):
             # horizontal mirror (vertical seam)
             if index == 3:
-                self.mirrorHorizontal(sourceSide="left", autoSnap=autoSnap)
+                self.mirror(axis='vertical', sourceSide='left', autoSnap=autoSnap)
             else:
-                self.mirrorHorizontal(sourceSide="right", autoSnap=autoSnap)
+                self.mirror(axis='vertical', sourceSide='right', autoSnap=autoSnap)
         else:
             # vertical mirror (horizontal seam)
             if index == 0:
-                self.mirrorVertical(sourceSide="top", autoSnap=autoSnap)
+                self.mirror(axis='horizontal', sourceSide='top', autoSnap=autoSnap)
             else:
-                self.mirrorVertical(sourceSide="bottom", autoSnap=autoSnap)
+                self.mirror(axis='horizontal', sourceSide='bottom', autoSnap=autoSnap)
         
         self.font.currentTab.redraw()
         self.w.close()
     
-    def mirrorHorizontal(self, sourceSide="left", autoSnap=True):
+    def mirror(self, axis='vertical', sourceSide='left', autoSnap=True):
         """
-        Mirror horizontally: seam is a vertical line (constant x).
-        sourceSide: "left" or "right"
+        Mirror selected nodes across a seam.
+        
+        axis: 'vertical' (left/right mirror) or 'horizontal' (top/bottom mirror)
+        sourceSide: 'left', 'right', 'top', or 'bottom'
         """
         layer = self.layer
-        paths = layer.paths
-        selNodes = self.selectedNodes()
-        log("Vertical mirror: %s source, %d selected nodes" % (sourceSide, len(selNodes)))
-        log("Horizontal mirror: %s source, %d selected nodes" % (sourceSide, len(selNodes)))
         
-        if not selNodes:
-            Message(
-                "No nodes selected",
-                "Select one half plus all seam points, then run again."
-            )
+        # Find paths that have selected nodes
+        selected_paths = []
+        for path in layer.paths:
+            if any(n.selected for n in path.nodes if n is not None):
+                selected_paths.append(path)
+        
+        if not selected_paths:
+            Message("No nodes selected", "Select nodes on one half of a contour and try again.")
             return
         
-        # Decide seam x based on source side
-        if sourceSide == "left":
-            axisX = max(n.position.x for n in selNodes)  # right edge of selected half
-        else:
-            axisX = min(n.position.x for n in selNodes)  # left edge of selected half
-        log("Initial axisX: %.3f" % axisX)
+        print("[Mirror] Found %d paths with selected nodes" % len(selected_paths))
         
-        center_band = 5.0
-        eps = 0.01
-        
-        # Convert GSNode to Point for geometry module
-        points = []
-        for node in selNodes:
-            on_curve = (node.type != GSOFFCURVE)
-            points.append(Point(node.position.x, node.position.y, on_curve))
-        
-        seam_nodes, selNodes = self._collect_horizontal_seam_nodes(selNodes, axisX, center_band)
-        if not seam_nodes:
-            Message(
-                "No seam points found",
-                f"Could not find seam nodes near x={axisX:.1f}. Select the seam line and try again."
-            )
-            return
-
-        # If auto-snap enabled, snap all on-curve nodes in seam band
-        if autoSnap:
-            avg_x = sum(n.position.x for n in seam_nodes) / len(seam_nodes)
-            for path in paths:
-                for node in path.nodes:
-                    if (
-                        node is not None
-                        and node.type != GSOFFCURVE
-                        and abs(node.position.x - axisX) <= center_band
-                    ):
-                        node.position.x = avg_x
-            axisX = avg_x
-            log("Axis snapped to %.3f" % axisX)
-            # Re-evaluate seam nodes after snapping
-            seam_nodes, selNodes = self._collect_horizontal_seam_nodes(selNodes, axisX, center_band)
-            if not seam_nodes:
-                Message(
-                    "No seam points found",
-                    f"Could not find seam nodes near snapped x={axisX:.1f}. Select the seam line and try again."
-                )
-                return
-            log("Axis snapped to %.3f" % axisX)
-        
-        # Validate seam alignment using geometry module
-        try:
-            # Re-collect points after potential snapping
-            points = []
-            for node in selNodes:
-                on_curve = (node.type != GSOFFCURVE)
-                points.append(Point(node.position.x, node.position.y, on_curve))
-            
-            # This will validate the seam
-            from mirror_geometry import find_seam_points, validate_seam_alignment
-            seam_points = find_seam_points(points, axisX, center_band, check_x=True)
-            
-            if not seam_points:
-                Message(
-                    "No seam points found",
-                    f"Could not find selected seam nodes near x={axisX:.1f}.\n"
-                    "Select the seam line and try again."
-                )
-                return
-            
-            aligned_x = validate_seam_alignment(seam_points, check_x=True, eps=eps)
-            axisX = aligned_x
-            log("Aligned axisX: %.3f" % axisX)
-            
-        except MirrorError as e:
-            Message(
-                "Seam validation failed",
-                str(e) + "\n\nAlign seam points or enable snapping, then run again."
-            )
-            return
-        
-        # Relaxed check: only verify selected seam nodes are aligned
-        # We no longer require ALL seam nodes to be selected - unselected ones on the
-        # opposite side will be deleted anyway. This supports the "update existing shape" workflow.
-        
-        # Record which paths had selections before we start deleting nodes.
-        # (Deleting nodes can clear the selection internally in Glyphs.)
-        paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
-        log("Paths with selection (before deletion): %d" % len(paths_with_selection))
-        if not paths_with_selection:
-            Message(
-                "No nodes selected",
-                "Select the half you want to keep (including seam nodes) and try again."
-            )
-            return
-
-        # Remove unselected nodes on the opposite side
-        deleted_counts = 0
-        for path in paths:
-            if not any(n.selected for n in path.nodes):
-                continue
-            
-            to_delete = []
-            for i, node in enumerate(path.nodes):
-                if not node.selected:
-                    if sourceSide == "left":
-                        # delete right side
-                        if node.position.x > axisX + eps:
-                            to_delete.append(i)
-                    else:
-                        # delete left side
-                        if node.position.x < axisX - eps:
-                            to_delete.append(i)
-            
-            for i in reversed(to_delete):
-                del path.nodes[i]
-            deleted_counts += len(to_delete)
-        log("Deleted %d nodes on opposite side" % deleted_counts)
-        
-        # Duplicate and mirror selected paths
-        paths_to_mirror = paths_with_selection
-        new_paths = []
-        
-        def _deselect_nodes(path):
-            for node in path.nodes:
-                try:
-                    if node is not None:
-                        node.selected = False
-                except AttributeError:
-                    pass
-
-        for p in paths_to_mirror:
-            new_path = p.copy()
-            # Mirror horizontally: x' = -x + 2*axisX
-            new_path.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * axisX, 0.0))
-            self._deselect_path_nodes(new_path)
-            new_paths.append(new_path)
-        log("Created %d mirrored paths" % len(new_paths))
-        
-        for p in new_paths:
-            layer.paths.append(p)
-        log("Layer now has %d paths" % len(layer.paths))
-        
-        layer.removeOverlap()
-        layer.correctPathDirection()
+        # Process each selected path independently
+        for path in selected_paths:
+            self.mirrorPath(path, axis, sourceSide, autoSnap)
     
-    def mirrorVertical(self, sourceSide="top", autoSnap=True):
-        """
-        Mirror vertically: seam is a horizontal line (constant y).
-        sourceSide: "top" or "bottom"
-        """
-        layer = self.layer
-        paths = layer.paths
-        selNodes = self.selectedNodes()
+    def mirrorPath(self, path, axis, sourceSide, autoSnap):
+        """Mirror a single path by replacing the opposite side with the selected side."""
         
-        if not selNodes:
-            Message(
-                "No nodes selected",
-                "Select one half plus all seam points, then run again."
-            )
+        # Collect selected nodes in this path
+        selected_nodes = [n for n in path.nodes if n is not None and n.selected]
+        
+        if not selected_nodes:
             return
         
-        # Decide seam y based on source side
-        # Note: In Glyphs, y increases upward, so top has larger y
-        if sourceSide == "top":
-            axisY = min(n.position.y for n in selNodes)  # bottom edge of top half
+        # Determine seam axis from selected nodes
+        if axis == 'vertical':
+            # Vertical seam (left/right mirror)
+            if sourceSide == 'left':
+                seam_coord = max(n.position.x for n in selected_nodes)
+            else:  # right
+                seam_coord = min(n.position.x for n in selected_nodes)
+            coord_attr = 'x'
         else:
-            axisY = max(n.position.y for n in selNodes)  # top edge of bottom half
-        log("Initial axisY: %.3f" % axisY)
+            # Horizontal seam (top/bottom mirror)
+            if sourceSide == 'top':
+                seam_coord = min(n.position.y for n in selected_nodes)
+            else:  # bottom
+                seam_coord = max(n.position.y for n in selected_nodes)
+            coord_attr = 'y'
         
-        center_band = 5.0
-        eps = 0.01
+        print("[Mirror] Path seam at %s=%.1f" % (coord_attr, seam_coord))
         
-        # Convert GSNode to Point for geometry module
-        points = []
-        for node in selNodes:
-            on_curve = (node.type != GSOFFCURVE)
-            points.append(Point(node.position.x, node.position.y, on_curve))
-        
-        seam_nodes, selNodes = self._collect_vertical_seam_nodes(selNodes, axisY, center_band)
-        if not seam_nodes:
-            Message(
-                "No seam points found",
-                f"Could not find seam nodes near y={axisY:.1f}. Select the seam line and try again."
-            )
-            return
-
-        # If auto-snap enabled, snap all on-curve nodes in seam band
+        # Snap seam nodes if requested
         if autoSnap:
-            avg_y = sum(n.position.y for n in seam_nodes) / len(seam_nodes)
-            for path in paths:
-                for node in path.nodes:
-                    if (
-                        node is not None
-                        and node.type != GSOFFCURVE
-                        and abs(node.position.y - axisY) <= center_band
-                    ):
-                        node.position.y = avg_y
-            axisY = avg_y
-            log("Axis snapped to %.3f" % axisY)
-            seam_nodes, selNodes = self._collect_vertical_seam_nodes(selNodes, axisY, center_band)
-            if not seam_nodes:
-                Message(
-                    "No seam points found",
-                    f"Could not find seam nodes near snapped y={axisY:.1f}. Select the seam line and try again."
-                )
-                return
-            log("Axis snapped to %.3f" % axisY)
+            seam_nodes = [n for n in selected_nodes 
+                         if n.type != GSOFFCURVE 
+                         and abs(getattr(n.position, coord_attr) - seam_coord) <= 5.0]
+            
+            if seam_nodes:
+                avg = sum(getattr(n.position, coord_attr) for n in seam_nodes) / len(seam_nodes)
+                for n in seam_nodes:
+                    setattr(n.position, coord_attr, avg)
+                seam_coord = avg
+                print("[Mirror] Snapped %d seam nodes to %.1f" % (len(seam_nodes), avg))
         
-        # Validate seam alignment
-        try:
-            points = []
-            for node in selNodes:
-                on_curve = (node.type != GSOFFCURVE)
-                points.append(Point(node.position.x, node.position.y, on_curve))
-            
-            from mirror_geometry import find_seam_points, validate_seam_alignment
-            seam_points = find_seam_points(points, axisY, center_band, check_x=False)
-            
-            if not seam_points:
-                Message(
-                    "No seam points found",
-                    f"Could not find selected seam nodes near y={axisY:.1f}.\n"
-                    "Select the seam line and try again."
-                )
-                return
-            
-            aligned_y = validate_seam_alignment(seam_points, check_x=False, eps=eps)
-            axisY = aligned_y
-            log("Aligned axisY: %.3f" % axisY)
-            
-        except MirrorError as e:
-            Message(
-                "Seam validation failed",
-                str(e) + "\n\nAlign seam points or enable snapping, then run again."
-            )
-            return
-        
-        # Relaxed check: only verify selected seam nodes are aligned
-        # We no longer require ALL seam nodes to be selected - unselected ones on the
-        # opposite side will be deleted anyway. This supports the "update existing shape" workflow.
-        
-        # Record paths that had selected nodes before deletion.
-        paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
-        log("Paths with selection (before deletion): %d" % len(paths_with_selection))
-        if not paths_with_selection:
-            Message(
-                "No nodes selected",
-                "Select the half you want to keep (including seam nodes) and try again."
-            )
-            return
-
-        # Remove unselected nodes on opposite side
-        deleted_counts = 0
-        for path in paths:
-            if not any(n.selected for n in path.nodes):
+        # Delete nodes on the opposite side (unselected nodes beyond the seam)
+        to_delete = []
+        for i, node in enumerate(path.nodes):
+            if node is None or node.selected:
                 continue
             
-            to_delete = []
-            for i, node in enumerate(path.nodes):
-                if not node.selected:
-                    if sourceSide == "top":
-                        # delete below seam
-                        if node.position.y < axisY - eps:
-                            to_delete.append(i)
-                    else:
-                        # delete above seam
-                        if node.position.y > axisY + eps:
-                            to_delete.append(i)
+            node_coord = getattr(node.position, coord_attr)
             
-            for i in reversed(to_delete):
-                del path.nodes[i]
-            deleted_counts += len(to_delete)
-        log("Deleted %d nodes on opposite side" % deleted_counts)
+            # Check if node is on opposite side of seam
+            if axis == 'vertical':
+                if sourceSide == 'left' and node_coord > seam_coord + 0.01:
+                    to_delete.append(i)
+                elif sourceSide == 'right' and node_coord < seam_coord - 0.01:
+                    to_delete.append(i)
+            else:
+                if sourceSide == 'top' and node_coord < seam_coord - 0.01:
+                    to_delete.append(i)
+                elif sourceSide == 'bottom' and node_coord > seam_coord + 0.01:
+                    to_delete.append(i)
         
-        # Duplicate and mirror selected paths
-        paths_to_mirror = paths_with_selection
-        new_paths = []
+        # Delete in reverse order to maintain indices
+        for i in reversed(to_delete):
+            del path.nodes[i]
         
-        for p in paths_to_mirror:
-            new_path = p.copy()
-            # Mirror vertically: y' = -y + 2*axisY
-            new_path.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * axisY))
-            self._deselect_path_nodes(new_path)
-            new_paths.append(new_path)
-        log("Created %d mirrored paths" % len(new_paths))
+        print("[Mirror] Deleted %d nodes on opposite side" % len(to_delete))
         
-        for p in new_paths:
-            layer.paths.append(p)
-        log("Layer now has %d paths" % len(layer.paths))
+        # Now mirror the selected side
+        # Create a copy of the path
+        mirrored_path = path.copy()
         
-        layer.removeOverlap()
-        layer.correctPathDirection()
+        # Apply mirror transform
+        if axis == 'vertical':
+            # Mirror horizontally: x' = -x + 2*seam
+            mirrored_path.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * seam_coord, 0.0))
+        else:
+            # Mirror vertically: y' = -y + 2*seam
+            mirrored_path.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * seam_coord))
+        
+        # Add mirrored path to layer
+        self.layer.paths.append(mirrored_path)
+        print("[Mirror] Added mirrored path")
+        
+        # Clean up
+        self.layer.removeOverlap()
+        self.layer.correctPathDirection()
 
 
 def main():
@@ -480,4 +189,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
