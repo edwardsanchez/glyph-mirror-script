@@ -176,6 +176,16 @@ class MirrorSelectionUI(object):
         # We no longer require ALL seam nodes to be selected - unselected ones on the
         # opposite side will be deleted anyway. This supports the "update existing shape" workflow.
         
+        # Record which paths had selections before we start deleting nodes.
+        # (Deleting nodes can clear the selection internally in Glyphs.)
+        paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
+        if not paths_with_selection:
+            Message(
+                "No nodes selected",
+                "Select the half you want to keep (including seam nodes) and try again."
+            )
+            return
+
         # Remove unselected nodes on the opposite side
         for path in paths:
             if not any(n.selected for n in path.nodes):
@@ -197,7 +207,7 @@ class MirrorSelectionUI(object):
                 del path.nodes[i]
         
         # Duplicate and mirror selected paths
-        paths_to_mirror = [p for p in paths if any(n.selected for n in p.nodes)]
+        paths_to_mirror = paths_with_selection
         new_paths = []
         
         for p in paths_to_mirror:
@@ -302,6 +312,15 @@ class MirrorSelectionUI(object):
         # We no longer require ALL seam nodes to be selected - unselected ones on the
         # opposite side will be deleted anyway. This supports the "update existing shape" workflow.
         
+        # Record paths that had selected nodes before deletion.
+        paths_with_selection = [p for p in paths if any(n.selected for n in p.nodes)]
+        if not paths_with_selection:
+            Message(
+                "No nodes selected",
+                "Select the half you want to keep (including seam nodes) and try again."
+            )
+            return
+
         # Remove unselected nodes on opposite side
         for path in paths:
             if not any(n.selected for n in path.nodes):
@@ -323,7 +342,7 @@ class MirrorSelectionUI(object):
                 del path.nodes[i]
         
         # Duplicate and mirror selected paths
-        paths_to_mirror = [p for p in paths if any(n.selected for n in p.nodes)]
+        paths_to_mirror = paths_with_selection
         new_paths = []
         
         for p in paths_to_mirror:
