@@ -205,7 +205,8 @@ class MirrorSelectionUI(object):
             # Mirror horizontally: x' = -x + 2*axisX
             new_path.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * axisX, 0.0))
             for n in new_path.nodes:
-                n.selected = False
+                if n is not None:
+                    n.selected = False
             new_paths.append(new_path)
         
         for p in new_paths:
@@ -330,7 +331,8 @@ class MirrorSelectionUI(object):
             # Mirror vertically: y' = -y + 2*axisY
             new_path.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * axisY))
             for n in new_path.nodes:
-                n.selected = False
+                if n is not None:
+                    n.selected = False
             new_paths.append(new_path)
         
         for p in new_paths:
