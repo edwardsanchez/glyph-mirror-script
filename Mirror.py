@@ -102,6 +102,15 @@ class MirrorSelectionUI(object):
 
         return [], selNodes
 
+    def _deselect_path_nodes(self, path):
+        """Safely deselect nodes in a path (handles None/other objects)."""
+        for node in path.nodes:
+            try:
+                if node is not None and hasattr(node, "selected"):
+                    node.selected = False
+            except AttributeError:
+                continue
+
     def _collect_vertical_seam_nodes(self, selNodes, axisY, center_band):
         """Ensure seam nodes exist near axisY. Returns (seam_nodes, updated_selection)."""
         seam_nodes = [
@@ -293,13 +302,19 @@ class MirrorSelectionUI(object):
         paths_to_mirror = paths_with_selection
         new_paths = []
         
+        def _deselect_nodes(path):
+            for node in path.nodes:
+                try:
+                    if node is not None:
+                        node.selected = False
+                except AttributeError:
+                    pass
+
         for p in paths_to_mirror:
             new_path = p.copy()
             # Mirror horizontally: x' = -x + 2*axisX
             new_path.applyTransform((-1.0, 0.0, 0.0, 1.0, 2.0 * axisX, 0.0))
-            for n in new_path.nodes:
-                if n is not None:
-                    n.selected = False
+            self._deselect_path_nodes(new_path)
             new_paths.append(new_path)
         log("Created %d mirrored paths" % len(new_paths))
         
@@ -447,9 +462,7 @@ class MirrorSelectionUI(object):
             new_path = p.copy()
             # Mirror vertically: y' = -y + 2*axisY
             new_path.applyTransform((1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * axisY))
-            for n in new_path.nodes:
-                if n is not None:
-                    n.selected = False
+            self._deselect_path_nodes(new_path)
             new_paths.append(new_path)
         log("Created %d mirrored paths" % len(new_paths))
         
