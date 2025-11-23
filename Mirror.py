@@ -122,6 +122,31 @@ class MirrorSelectionUI(object):
             coord_attr = 'y'
         
         print("[Mirror] Path seam at %s=%.1f" % (coord_attr, seam_coord))
+
+        # Guard: ensure we actually have some nodes clearly on one side of the seam.
+        # If the user only selected the seam nodes, do NOTHING instead of destroying the path.
+        side_nodes = []
+        for n in selected_nodes:
+            v = getattr(n.position, coord_attr)
+            if axis == 'vertical':
+                if sourceSide == 'left' and v < seam_coord - 0.01:
+                    side_nodes.append(n)
+                elif sourceSide == 'right' and v > seam_coord + 0.01:
+                    side_nodes.append(n)
+            else:
+                if sourceSide == 'top' and v > seam_coord + 0.01:
+                    side_nodes.append(n)
+                elif sourceSide == 'bottom' and v < seam_coord - 0.01:
+                    side_nodes.append(n)
+
+        if not side_nodes:
+            # Only seam (or nearly-seam) nodes selected – bail out safely.
+            Message(
+                "Selection is only seam nodes",
+                "Select the half you want to keep (not just the center line) and run again."
+            )
+            print("[Mirror] Aborted: selection contained only seam nodes")
+            return
         
         # Snap seam nodes if requested
         if autoSnap:
@@ -177,10 +202,6 @@ class MirrorSelectionUI(object):
         # Add mirrored path to layer
         self.layer.paths.append(mirrored_path)
         print("[Mirror] Added mirrored path")
-        
-        # Clean up
-        self.layer.removeOverlap()
-        self.layer.correctPathDirection()
 
 
 def main():
