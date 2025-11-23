@@ -70,6 +70,68 @@ class MirrorSelectionUI(object):
     def selectedNodes(self):
         """Collect all selected nodes from the layer."""
         return [n for p in self.layer.paths for n in p.nodes if n.selected]
+
+    def _collect_horizontal_seam_nodes(self, selNodes, axisX, center_band):
+        """Ensure seam nodes exist near axisX. Returns (seam_nodes, updated_selection)."""
+        seam_nodes = [
+            n for n in selNodes
+            if n.type != GSOFFCURVE and abs(n.position.x - axisX) <= center_band
+        ]
+        if seam_nodes:
+            return seam_nodes, selNodes
+
+        auto_nodes = []
+        for path in self.layer.paths:
+            for node in path.nodes:
+                if (
+                    node is not None
+                    and node.type != GSOFFCURVE
+                    and abs(node.position.x - axisX) <= center_band
+                ):
+                    node.selected = True
+                    auto_nodes.append(node)
+
+        if auto_nodes:
+            log("Auto-selected %d seam nodes near x=%.3f" % (len(auto_nodes), axisX))
+            new_selection = self.selectedNodes()
+            seam_nodes = [
+                n for n in new_selection
+                if n.type != GSOFFCURVE and abs(n.position.x - axisX) <= center_band
+            ]
+            return seam_nodes, new_selection
+
+        return [], selNodes
+
+    def _collect_vertical_seam_nodes(self, selNodes, axisY, center_band):
+        """Ensure seam nodes exist near axisY. Returns (seam_nodes, updated_selection)."""
+        seam_nodes = [
+            n for n in selNodes
+            if n.type != GSOFFCURVE and abs(n.position.y - axisY) <= center_band
+        ]
+        if seam_nodes:
+            return seam_nodes, selNodes
+
+        auto_nodes = []
+        for path in self.layer.paths:
+            for node in path.nodes:
+                if (
+                    node is not None
+                    and node.type != GSOFFCURVE
+                    and abs(node.position.y - axisY) <= center_band
+                ):
+                    node.selected = True
+                    auto_nodes.append(node)
+
+        if auto_nodes:
+            log("Auto-selected %d seam nodes near y=%.3f" % (len(auto_nodes), axisY))
+            new_selection = self.selectedNodes()
+            seam_nodes = [
+                n for n in new_selection
+                if n.type != GSOFFCURVE and abs(n.position.y - axisY) <= center_band
+            ]
+            return seam_nodes, new_selection
+
+        return [], selNodes
     
     def runCallback(self, sender):
         """Execute the mirror operation based on UI selection."""
@@ -127,31 +189,35 @@ class MirrorSelectionUI(object):
             on_curve = (node.type != GSOFFCURVE)
             points.append(Point(node.position.x, node.position.y, on_curve))
         
+        seam_nodes, selNodes = self._collect_horizontal_seam_nodes(selNodes, axisX, center_band)
+        if not seam_nodes:
+            Message(
+                "No seam points found",
+                f"Could not find seam nodes near x={axisX:.1f}. Select the seam line and try again."
+            )
+            return
+
         # If auto-snap enabled, snap all on-curve nodes in seam band
         if autoSnap:
-            # Find seam nodes
-            seam_nodes = [n for n in selNodes 
-                         if n.type != GSOFFCURVE 
-                         and abs(n.position.x - axisX) <= center_band]
-            
+            avg_x = sum(n.position.x for n in seam_nodes) / len(seam_nodes)
+            for path in paths:
+                for node in path.nodes:
+                    if (
+                        node is not None
+                        and node.type != GSOFFCURVE
+                        and abs(node.position.x - axisX) <= center_band
+                    ):
+                        node.position.x = avg_x
+            axisX = avg_x
+            log("Axis snapped to %.3f" % axisX)
+            # Re-evaluate seam nodes after snapping
+            seam_nodes, selNodes = self._collect_horizontal_seam_nodes(selNodes, axisX, center_band)
             if not seam_nodes:
                 Message(
                     "No seam points found",
-                    f"Could not find selected seam nodes near x={axisX:.1f}.\n"
-                    "Select the seam line and try again."
+                    f"Could not find seam nodes near snapped x={axisX:.1f}. Select the seam line and try again."
                 )
                 return
-            
-            # Calculate average position
-            avg_x = sum(n.position.x for n in seam_nodes) / len(seam_nodes)
-            
-            # Snap all nodes in band (on-curve only)
-            for path in paths:
-                for node in path.nodes:
-                    if node.type != GSOFFCURVE and abs(node.position.x - axisX) <= center_band:
-                        node.position.x = avg_x
-            
-            axisX = avg_x
             log("Axis snapped to %.3f" % axisX)
         
         # Validate seam alignment using geometry module
@@ -277,28 +343,34 @@ class MirrorSelectionUI(object):
             on_curve = (node.type != GSOFFCURVE)
             points.append(Point(node.position.x, node.position.y, on_curve))
         
+        seam_nodes, selNodes = self._collect_vertical_seam_nodes(selNodes, axisY, center_band)
+        if not seam_nodes:
+            Message(
+                "No seam points found",
+                f"Could not find seam nodes near y={axisY:.1f}. Select the seam line and try again."
+            )
+            return
+
         # If auto-snap enabled, snap all on-curve nodes in seam band
         if autoSnap:
-            seam_nodes = [n for n in selNodes 
-                         if n.type != GSOFFCURVE 
-                         and abs(n.position.y - axisY) <= center_band]
-            
+            avg_y = sum(n.position.y for n in seam_nodes) / len(seam_nodes)
+            for path in paths:
+                for node in path.nodes:
+                    if (
+                        node is not None
+                        and node.type != GSOFFCURVE
+                        and abs(node.position.y - axisY) <= center_band
+                    ):
+                        node.position.y = avg_y
+            axisY = avg_y
+            log("Axis snapped to %.3f" % axisY)
+            seam_nodes, selNodes = self._collect_vertical_seam_nodes(selNodes, axisY, center_band)
             if not seam_nodes:
                 Message(
                     "No seam points found",
-                    f"Could not find selected seam nodes near y={axisY:.1f}.\n"
-                    "Select the seam line and try again."
+                    f"Could not find seam nodes near snapped y={axisY:.1f}. Select the seam line and try again."
                 )
                 return
-            
-            avg_y = sum(n.position.y for n in seam_nodes) / len(seam_nodes)
-            
-            for path in paths:
-                for node in path.nodes:
-                    if node.type != GSOFFCURVE and abs(node.position.y - axisY) <= center_band:
-                        node.position.y = avg_y
-            
-            axisY = avg_y
             log("Axis snapped to %.3f" % axisY)
         
         # Validate seam alignment
