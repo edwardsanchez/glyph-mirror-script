@@ -221,11 +221,16 @@ class MirrorSelectionUI(object):
         # Replace the original path with the unified result from tmp_layer
         new_paths = [p.copy() for p in tmp_layer.paths]
 
-        # Remove original path
-        del layer.paths[pathIndex]
-        # Insert new paths at the same index (preserve order)
-        for new_path in reversed(new_paths):
-            layer.paths.insert(pathIndex, new_path)
+        if not new_paths:
+            print("[Mirror] Warning: no paths produced after removeOverlap()")
+            return
+
+        # Replace original path in-place as much as possible.
+        # GSProxyShapes does not support item deletion, but item assignment and append do.
+        # Use the first resulting path as the replacement and append any additional paths.
+        layer.paths[pathIndex] = new_paths[0]
+        for extra_path in new_paths[1:]:
+            layer.paths.append(extra_path)
 
         print("[Mirror] Replaced path with %d unified path(s)" % len(new_paths))
 
