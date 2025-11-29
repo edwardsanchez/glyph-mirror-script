@@ -171,3 +171,6 @@ def mirror_vertical(points, axis_y, source_side="top", eps=0.01, center_band=5.0
     
     return source + mirrored
 
+
+
+

@@ -338,3 +338,6 @@ Common issues:
 - **Vanilla UI not appearing**: Check that Glyphs has the vanilla module installed
 - **Transform not working**: Verify Glyphs version is 3.x
 
+
+
+
