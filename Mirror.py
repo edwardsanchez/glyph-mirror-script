@@ -198,38 +198,48 @@ class MirrorSelectionUI(object):
             print("[Mirror] Warning: path not found in layer")
             return
 
-        working_path = path.copy()
-
-        # Delete nodes on the opposite side (unselected nodes beyond the seam),
-        # but only within this working copy.
-        to_delete = []
-        for i, node in enumerate(working_path.nodes):
-            if node is None or node.selected:
-                continue
-            
-            node_coord = getattr(node.position, coord_attr)
-            
-            # Check if node is on opposite side of seam
-            if axis == 'vertical':
-                if sourceSide == 'left' and node_coord > seam_coord + 0.01:
-                    to_delete.append(i)
-                elif sourceSide == 'right' and node_coord < seam_coord - 0.01:
-                    to_delete.append(i)
-            else:
-                if sourceSide == 'top' and node_coord < seam_coord - 0.01:
-                    to_delete.append(i)
-                elif sourceSide == 'bottom' and node_coord > seam_coord + 0.01:
-                    to_delete.append(i)
+        # Work on a COPY of the path to avoid modifying the original during processing
+        # We need to preserve the original connectivity logic.
+        # If we delete nodes from a closed path, we might create a gap in the middle of the list.
+        # We must reorder the nodes so the gap is at the end.
         
-        # Delete in reverse order to maintain indices
-        for i in reversed(to_delete):
-            del working_path.nodes[i]
-            
-        # If we deleted nodes, the path should be open for merging
-        if to_delete:
-            working_path.closed = False
+        # 1. Identify selected indices
+        selected_indices = [i for i, n in enumerate(path.nodes) if n.selected]
+        if len(selected_indices) < 2:
+            return
 
-        print("[Mirror] Deleted %d nodes on opposite side" % len(to_delete))
+        # 2. Find the gap in the sequence
+        total_original = len(path.nodes)
+        gap_indices = []
+        
+        for k in range(len(selected_indices)):
+            curr_idx = selected_indices[k]
+            next_idx = selected_indices[(k + 1) % len(selected_indices)]
+            diff = (next_idx - curr_idx) % total_original
+            if diff != 1:
+                gap_indices.append(k)
+        
+        # 3. Determine best start point
+        if len(gap_indices) == 1:
+            gap_index = gap_indices[0]
+            start_pos = (gap_index + 1) % len(selected_indices)
+            new_order_indices = selected_indices[start_pos:] + selected_indices[:start_pos]
+        elif len(gap_indices) == 0:
+            new_order_indices = selected_indices
+        else:
+            # Multiple gaps? Just use the first gap found to linearize it.
+            gap_index = gap_indices[0]
+            start_pos = (gap_index + 1) % len(selected_indices)
+            new_order_indices = selected_indices[start_pos:] + selected_indices[:start_pos]
+
+        # 4. Build the working path with correctly ordered copies
+        working_path = GSPath()
+        for idx in new_order_indices:
+            working_path.nodes.append(path.nodes[idx].copy())
+            
+        working_path.closed = False
+        
+        print("[Mirror] Reordered working path has %d nodes" % len(working_path.nodes))
         
         # Now mirror the remaining (source) side
         source_half = working_path
@@ -281,8 +291,7 @@ class MirrorSelectionUI(object):
             # Mirror (Reversed): B' -> ... -> A'
             
             seam_tolerance = 1.0
-            seam_tolerance = 1.0
-            merge_tolerance = 0.5
+            merge_tolerance = 1.0
             
             unified_nodes = []
             
@@ -291,7 +300,7 @@ class MirrorSelectionUI(object):
                 unified_nodes.append(n.copy())
             
             # Add mirrored nodes (already reversed), skipping duplicates
-            for n in mirrored_half.nodes:
+            for i, n in enumerate(mirrored_half.nodes):
                 node_coord = getattr(n.position, coord_attr)
                 is_seam_node = abs(node_coord - seam_coord) <= seam_tolerance
                 
@@ -304,6 +313,10 @@ class MirrorSelectionUI(object):
                     if dist_x < merge_tolerance and dist_y < merge_tolerance:
                         print("[Mirror] Skipped duplicate connection node (gap: %.3f, %.3f)" % (dist_x, dist_y))
                         continue
+                    elif is_seam_node:
+                        # Debug why it wasn't skipped if it was a seam node
+                        print("[Mirror] Seam node NOT skipped! Gap: %.3f, %.3f. Pos: (%.1f, %.1f) vs Last: (%.1f, %.1f)" % 
+                              (dist_x, dist_y, n.position.x, n.position.y, last.position.x, last.position.y))
                 
                 # Check for duplicate against first node (A' -> A) - closing the loop
                 if is_seam_node and unified_nodes:
@@ -314,6 +327,8 @@ class MirrorSelectionUI(object):
                     if dist_x < merge_tolerance and dist_y < merge_tolerance:
                         print("[Mirror] Skipped duplicate closing node (gap: %.3f, %.3f)" % (dist_x, dist_y))
                         continue
+                    elif i == len(mirrored_half.nodes) - 1:
+                         print("[Mirror] Closing node NOT skipped! Gap: %.3f, %.3f" % (dist_x, dist_y))
                 
                 unified_nodes.append(n.copy())
             
