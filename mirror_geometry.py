@@ -24,6 +24,29 @@ class NoSeamPointsError(MirrorError):
     pass
 
 
+def calculate_axis_from_bounds(points, check_x=True):
+    """
+    Calculate the mirror axis from the bounding box of the provided points.
+
+    Args:
+        points: List of Point objects describing the full path
+        check_x: If True, compute the x-axis (horizontal mirror); otherwise y-axis
+
+    Returns:
+        The center coordinate (x or y) of the bounding box
+
+    Raises:
+        MirrorError: If no points are provided
+    """
+    if not points:
+        raise MirrorError("Cannot calculate axis from empty point list")
+
+    coords = [p.x if check_x else p.y for p in points]
+    min_coord = min(coords)
+    max_coord = max(coords)
+    return (min_coord + max_coord) / 2.0
+
+
 def almost_equal(a, b, eps=0.01):
     """Check if two float values are equal within tolerance."""
     return abs(a - b) <= eps
@@ -83,7 +106,14 @@ def validate_seam_alignment(seam_points, check_x=True, eps=0.01):
     return sum(coords) / len(coords)
 
 
-def mirror_horizontal(points, axis_x, source_side="left", eps=0.01, center_band=5.0):
+def mirror_horizontal(
+    points,
+    axis_x,
+    source_side="left",
+    eps=0.01,
+    center_band=5.0,
+    all_path_points=None,
+):
     """
     Mirror points horizontally across a vertical axis.
     
@@ -93,6 +123,7 @@ def mirror_horizontal(points, axis_x, source_side="left", eps=0.01, center_band=
         source_side: "left" or "right" - which side is the source
         eps: Tolerance for coordinate comparisons
         center_band: Distance tolerance for finding seam points
+        all_path_points: Optional full path points for bounds-based fallback
     
     Returns:
         List of Point objects representing the full mirrored shape
@@ -103,13 +134,15 @@ def mirror_horizontal(points, axis_x, source_side="left", eps=0.01, center_band=
     """
     # Find and validate seam points
     seam_points = find_seam_points(points, axis_x, center_band, check_x=True)
-    if not seam_points:
-        raise NoSeamPointsError(
-            f"No seam points found near x={axis_x} within band={center_band}"
-        )
-    
-    # Validate alignment and get precise axis value
-    aligned_x = validate_seam_alignment(seam_points, check_x=True, eps=eps)
+    if seam_points:
+        # Validate alignment and get precise axis value
+        aligned_x = validate_seam_alignment(seam_points, check_x=True, eps=eps)
+    else:
+        if all_path_points is None:
+            raise NoSeamPointsError(
+                f"No seam points found near x={axis_x} within band={center_band}"
+            )
+        aligned_x = calculate_axis_from_bounds(all_path_points, check_x=True)
     
     # Separate source points (keep as-is)
     if source_side == "left":
@@ -127,7 +160,14 @@ def mirror_horizontal(points, axis_x, source_side="left", eps=0.01, center_band=
     return source + mirrored
 
 
-def mirror_vertical(points, axis_y, source_side="top", eps=0.01, center_band=5.0):
+def mirror_vertical(
+    points,
+    axis_y,
+    source_side="top",
+    eps=0.01,
+    center_band=5.0,
+    all_path_points=None,
+):
     """
     Mirror points vertically across a horizontal axis.
     
@@ -137,6 +177,7 @@ def mirror_vertical(points, axis_y, source_side="top", eps=0.01, center_band=5.0
         source_side: "top" or "bottom" - which side is the source
         eps: Tolerance for coordinate comparisons
         center_band: Distance tolerance for finding seam points
+        all_path_points: Optional full path points for bounds-based fallback
     
     Returns:
         List of Point objects representing the full mirrored shape
@@ -147,13 +188,15 @@ def mirror_vertical(points, axis_y, source_side="top", eps=0.01, center_band=5.0
     """
     # Find and validate seam points
     seam_points = find_seam_points(points, axis_y, center_band, check_x=False)
-    if not seam_points:
-        raise NoSeamPointsError(
-            f"No seam points found near y={axis_y} within band={center_band}"
-        )
-    
-    # Validate alignment and get precise axis value
-    aligned_y = validate_seam_alignment(seam_points, check_x=False, eps=eps)
+    if seam_points:
+        # Validate alignment and get precise axis value
+        aligned_y = validate_seam_alignment(seam_points, check_x=False, eps=eps)
+    else:
+        if all_path_points is None:
+            raise NoSeamPointsError(
+                f"No seam points found near y={axis_y} within band={center_band}"
+            )
+        aligned_y = calculate_axis_from_bounds(all_path_points, check_x=False)
     
     # Separate source points (keep as-is)
     # Note: In Glyphs, y increases upward, so "top" has larger y values

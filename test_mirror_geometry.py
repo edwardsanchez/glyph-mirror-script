@@ -6,15 +6,16 @@ Run with: pytest test_mirror_geometry.py
 
 import pytest
 from mirror_geometry import (
-    Point, 
-    mirror_horizontal, 
+    Point,
+    mirror_horizontal,
     mirror_vertical,
     find_seam_points,
     validate_seam_alignment,
     almost_equal,
     MirrorError,
     SeamAlignmentError,
-    NoSeamPointsError
+    NoSeamPointsError,
+    calculate_axis_from_bounds,
 )
 
 
@@ -105,6 +106,29 @@ class TestValidateSeamAlignment:
             validate_seam_alignment([], check_x=True)
 
 
+class TestCalculateAxisFromBounds:
+    def test_calculates_x_axis_center(self):
+        points = [
+            Point(-50.0, 0.0, True),
+            Point(50.0, 0.0, True),
+            Point(20.0, 10.0, False),
+        ]
+        axis = calculate_axis_from_bounds(points, check_x=True)
+        assert almost_equal(axis, 0.0, eps=0.001)
+
+    def test_calculates_y_axis_center(self):
+        points = [
+            Point(0.0, 10.0, True),
+            Point(0.0, 30.0, True),
+        ]
+        axis = calculate_axis_from_bounds(points, check_x=False)
+        assert almost_equal(axis, 20.0, eps=0.001)
+
+    def test_empty_points_raise_error(self):
+        with pytest.raises(MirrorError):
+            calculate_axis_from_bounds([], check_x=True)
+
+
 class TestMirrorHorizontal:
     def test_simple_triangle_left_source(self):
         """Mirror a simple left-side triangle to the right."""
@@ -188,6 +212,49 @@ class TestMirrorHorizontal:
         with pytest.raises(NoSeamPointsError):
             mirror_horizontal(points, axis_x=0.0, source_side="left", center_band=1.0)
 
+    def test_bounds_fallback_no_seam_horizontal(self):
+        """Mirror using bounds when no seam nodes are selected."""
+        selected = [
+            Point(10.0, 0.0, True),
+            Point(20.0, 40.0, True),
+        ]
+        whole_path = selected + [
+            Point(190.0, 0.0, True),
+            Point(180.0, 40.0, True),
+        ]
+
+        result = mirror_horizontal(
+            selected,
+            axis_x=0.0,
+            source_side="left",
+            all_path_points=whole_path,
+        )
+
+        # Expect two mirrored points on the right half
+        assert len(result) == 4
+        assert any(almost_equal(p.x, 190.0) and almost_equal(p.y, 0.0) for p in result)
+        assert any(almost_equal(p.x, 180.0) and almost_equal(p.y, 40.0) for p in result)
+
+    def test_seam_points_take_precedence_over_bounds(self):
+        """When seam nodes exist, ignore bounds-only axis."""
+        selected = [
+            Point(-10.0, 0.0, True),
+            Point(0.0, 5.0, True),  # seam
+            Point(0.0, 0.0, True),  # seam
+        ]
+        whole_path = selected + [
+            Point(30.0, 0.0, True),  # far right point -> different bounds center
+        ]
+
+        result = mirror_horizontal(
+            selected,
+            axis_x=0.0,
+            source_side="left",
+            all_path_points=whole_path,
+        )
+
+        # Seam-based axis (x=0) should be used, so left point mirrors to x=10
+        assert any(almost_equal(p.x, 10.0) and almost_equal(p.y, 0.0) for p in result)
 
 class TestMirrorVertical:
     def test_simple_trapezoid_top_source(self):
@@ -261,6 +328,28 @@ class TestMirrorVertical:
         with pytest.raises(SeamAlignmentError):
             mirror_vertical(points, axis_y=100.0, source_side="top")
 
+    def test_bounds_fallback_no_seam_vertical(self):
+        """Mirror vertically using bounds fallback."""
+        selected = [
+            Point(0.0, 120.0, True),
+            Point(10.0, 110.0, True),
+        ]
+        whole_path = selected + [
+            Point(0.0, 80.0, True),
+            Point(10.0, 70.0, True),
+        ]
+
+        result = mirror_vertical(
+            selected,
+            axis_y=0.0,
+            source_side="top",
+            all_path_points=whole_path,
+        )
+
+        # Total bounds center is (70 + 120)/2 = 95, so mirrored y should be 70 and 80
+        assert any(almost_equal(p.y, 70.0) for p in result)
+        assert any(almost_equal(p.y, 80.0) for p in result)
+
 
 class TestToleranceBoundaries:
     def test_point_exactly_on_seam(self):
@@ -290,6 +379,167 @@ class TestToleranceBoundaries:
         assert len(result) > 0
         # Far point should be mirrored
         assert any(almost_equal(p.x, 10.0) and almost_equal(p.y, 0.0) for p in result)
+
+
+class TestNodeCountValidation:
+    """Test that mirroring produces correct node counts."""
+    
+    def test_seam_aligned_node_count(self):
+        """
+        With perfectly aligned seam: final = selected * 2 - seam_count
+        Seam nodes should not be duplicated.
+        """
+        # 5 selected nodes, 2 are on seam (x=0)
+        selected = [
+            Point(-10.0, 0.0, True),   # left
+            Point(-5.0, 5.0, False),   # handle
+            Point(0.0, 10.0, True),    # SEAM
+            Point(0.0, 0.0, True),     # SEAM
+            Point(-5.0, -5.0, False),  # handle
+        ]
+        
+        result = mirror_horizontal(
+            selected,
+            axis_x=0.0,
+            source_side="left",
+            center_band=1.0,
+        )
+        
+        # Expected: 5 * 2 - 2 = 8 nodes (2 seam nodes not duplicated)
+        # But our function returns source + mirrored (including seam duplicates)
+        # The Glyphs script handles deduplication, geometry module just mirrors
+        assert len(result) == 10  # 5 source + 5 mirrored
+        
+        # Check that seam nodes appear twice (will be deduplicated by Glyphs)
+        seam_nodes = [p for p in result if almost_equal(p.x, 0.0)]
+        assert len(seam_nodes) == 4  # 2 original + 2 mirrored at same position
+    
+    def test_no_seam_node_count(self):
+        """
+        Without seam nodes: final = selected * 2
+        All nodes get mirrored.
+        """
+        # 4 selected nodes, none on seam
+        selected = [
+            Point(10.0, 0.0, True),
+            Point(15.0, 5.0, False),
+            Point(20.0, 10.0, True),
+            Point(15.0, -5.0, False),
+        ]
+        
+        # Full path bounds: x=[10, 100], so axis = 55
+        all_path = selected + [
+            Point(80.0, 0.0, True),
+            Point(100.0, 10.0, True),
+        ]
+        
+        result = mirror_horizontal(
+            selected,
+            axis_x=50.0,  # Will be overridden by bounds since no seam at 50
+            source_side="left",
+            center_band=1.0,
+            all_path_points=all_path,
+        )
+        
+        # Expected: 4 * 2 = 8 nodes
+        assert len(result) == 8
+        
+        # Verify mirrored positions (axis = 55, so x' = 110 - x)
+        # Original (10, 0) -> mirrored (100, 0)
+        assert any(almost_equal(p.x, 100.0) and almost_equal(p.y, 0.0) for p in result)
+
+
+class TestRoundedRectangleCase:
+    """Test the specific rounded rectangle case from the user."""
+    
+    def test_left_half_to_full_rounded_rect(self):
+        """
+        Mirror a left half of a rounded rectangle to create the full shape.
+        
+        Original (left half, open path):
+        - (202, 0) on-curve (top)
+        - (71, 0) handle
+        - (0, 70) handle
+        - (0, 202) on-curve
+        - (0, 1170) on-curve
+        - (0, 1301) handle
+        - (71, 1372) handle
+        - (202, 1372) on-curve (bottom)
+        
+        Full bounds would be x=[0, 1372], so axis = 686
+        Mirror formula: x' = 1372 - x
+        """
+        # The selected left half
+        selected = [
+            Point(202.0, 0.0, True),      # top endpoint
+            Point(71.0, 0.0, False),      # handle
+            Point(0.0, 70.0, False),      # handle
+            Point(0.0, 202.0, True),      # on-curve
+            Point(0.0, 1170.0, True),     # on-curve
+            Point(0.0, 1301.0, False),    # handle
+            Point(71.0, 1372.0, False),   # handle
+            Point(202.0, 1372.0, True),   # bottom endpoint
+        ]
+        
+        # Full path bounds (including the other half we want to create)
+        # Left side goes 0-202, right side would go 1170-1372
+        # Total: 0-1372
+        all_path_points = selected + [
+            Point(1170.0, 0.0, True),
+            Point(1372.0, 202.0, True),
+            Point(1372.0, 1170.0, True),
+            Point(1170.0, 1372.0, True),
+        ]
+        
+        # No seam points at axis (axis=686, but no points near 686)
+        result = mirror_horizontal(
+            selected,
+            axis_x=686.0,  # Will be ignored since no seam, uses bounds
+            source_side="left",
+            center_band=5.0,
+            all_path_points=all_path_points,
+        )
+        
+        # Axis from bounds: (0 + 1372) / 2 = 686
+        # Check mirrored points exist (x' = 1372 - x)
+        
+        # Original (202, 0) -> mirrored (1170, 0)
+        assert any(almost_equal(p.x, 1170.0) and almost_equal(p.y, 0.0) and p.on_curve for p in result), \
+            "Missing mirrored point (1170, 0)"
+        
+        # Original handle (71, 0) -> mirrored (1301, 0)
+        assert any(almost_equal(p.x, 1301.0) and almost_equal(p.y, 0.0) and not p.on_curve for p in result), \
+            "Missing mirrored handle (1301, 0)"
+        
+        # Original handle (0, 70) -> mirrored (1372, 70)
+        assert any(almost_equal(p.x, 1372.0) and almost_equal(p.y, 70.0) and not p.on_curve for p in result), \
+            "Missing mirrored handle (1372, 70)"
+        
+        # Original (0, 202) -> mirrored (1372, 202)
+        assert any(almost_equal(p.x, 1372.0) and almost_equal(p.y, 202.0) and p.on_curve for p in result), \
+            "Missing mirrored point (1372, 202)"
+        
+        # Original (0, 1170) -> mirrored (1372, 1170)
+        assert any(almost_equal(p.x, 1372.0) and almost_equal(p.y, 1170.0) and p.on_curve for p in result), \
+            "Missing mirrored point (1372, 1170)"
+        
+        # Original handle (0, 1301) -> mirrored (1372, 1301)
+        assert any(almost_equal(p.x, 1372.0) and almost_equal(p.y, 1301.0) and not p.on_curve for p in result), \
+            "Missing mirrored handle (1372, 1301)"
+        
+        # Original handle (71, 1372) -> mirrored (1301, 1372)
+        assert any(almost_equal(p.x, 1301.0) and almost_equal(p.y, 1372.0) and not p.on_curve for p in result), \
+            "Missing mirrored handle (1301, 1372)"
+        
+        # Original (202, 1372) -> mirrored (1170, 1372)
+        assert any(almost_equal(p.x, 1170.0) and almost_equal(p.y, 1372.0) and p.on_curve for p in result), \
+            "Missing mirrored point (1170, 1372)"
+        
+        # Also verify original points are preserved
+        assert any(almost_equal(p.x, 202.0) and almost_equal(p.y, 0.0) for p in result), \
+            "Original point (202, 0) should be preserved"
+        assert any(almost_equal(p.x, 71.0) and almost_equal(p.y, 0.0) for p in result), \
+            "Original handle (71, 0) should be preserved"
 
 
 if __name__ == "__main__":
