@@ -281,13 +281,16 @@ class MirrorSelectionUI(object):
             # Mirror (Reversed): B' -> ... -> A'
             
             seam_tolerance = 1.0
+            seam_tolerance = 1.0
+            merge_tolerance = 0.5
+            
             unified_nodes = []
             
             # Add all source nodes
             for n in source_half.nodes:
                 unified_nodes.append(n.copy())
             
-            # Add mirrored nodes (already reversed), skipping seam duplicates
+            # Add mirrored nodes (already reversed), skipping duplicates
             for n in mirrored_half.nodes:
                 node_coord = getattr(n.position, coord_attr)
                 is_seam_node = abs(node_coord - seam_coord) <= seam_tolerance
@@ -295,15 +298,21 @@ class MirrorSelectionUI(object):
                 # Check for duplicate against last added node (B -> B')
                 if unified_nodes:
                     last = unified_nodes[-1]
-                    if (abs(n.position.x - last.position.x) < 0.1 and 
-                        abs(n.position.y - last.position.y) < 0.1):
+                    dist_x = abs(n.position.x - last.position.x)
+                    dist_y = abs(n.position.y - last.position.y)
+                    
+                    if dist_x < merge_tolerance and dist_y < merge_tolerance:
+                        print("[Mirror] Skipped duplicate connection node (gap: %.3f, %.3f)" % (dist_x, dist_y))
                         continue
                 
-                # Check for duplicate against first node (A' -> A) - only if near seam
+                # Check for duplicate against first node (A' -> A) - closing the loop
                 if is_seam_node and unified_nodes:
                     first = unified_nodes[0]
-                    if (abs(n.position.x - first.position.x) < 0.1 and 
-                        abs(n.position.y - first.position.y) < 0.1):
+                    dist_x = abs(n.position.x - first.position.x)
+                    dist_y = abs(n.position.y - first.position.y)
+                    
+                    if dist_x < merge_tolerance and dist_y < merge_tolerance:
+                        print("[Mirror] Skipped duplicate closing node (gap: %.3f, %.3f)" % (dist_x, dist_y))
                         continue
                 
                 unified_nodes.append(n.copy())
